@@ -210,6 +210,9 @@ public class RowDataStoreWriteOperator extends TableWriteOperator<InternalRow> {
     @Override
     protected List<Committable> prepareCommit(boolean waitCompaction, long checkpointId)
             throws IOException {
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Calling prepareCommit for checkpoint {}", checkpointId);
+        }
         List<Committable> committables = super.prepareCommit(waitCompaction, checkpointId);
 
         if (logCallback != null) {

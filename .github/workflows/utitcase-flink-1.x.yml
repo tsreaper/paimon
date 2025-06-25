@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        flink_version: ['common', 'common', 'common', 'common', 'common', 'common', 'common', 'common']
+        flink_version: ['common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common', 'common']
 
     steps:
       - name: Checkout code

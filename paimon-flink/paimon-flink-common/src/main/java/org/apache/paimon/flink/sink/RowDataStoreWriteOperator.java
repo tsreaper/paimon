@@ -18,6 +18,7 @@
 
 package org.apache.paimon.flink.sink;
 
+import org.apache.paimon.KeyValue;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.flink.log.LogWriteCallback;
 import org.apache.paimon.options.Options;
@@ -41,6 +42,8 @@ import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.streaming.util.functions.StreamingFunctionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -56,6 +59,7 @@ import static org.apache.paimon.CoreOptions.LOG_IGNORE_DELETE;
 public class RowDataStoreWriteOperator extends TableWriteOperator<InternalRow> {
 
     private static final long serialVersionUID = 3L;
+    private static final Logger LOG = LoggerFactory.getLogger(RowDataStoreWriteOperator.class);
 
     @Nullable private final LogSinkFunction logSinkFunction;
     private transient SimpleContext sinkContext;
@@ -136,10 +140,14 @@ public class RowDataStoreWriteOperator extends TableWriteOperator<InternalRow> {
     @Override
     public void processElement(StreamRecord<InternalRow> element) throws Exception {
         sinkContext.timestamp = element.hasTimestamp() ? element.getTimestamp() : null;
+        InternalRow internalRow = element.getValue();
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Write row: {}", KeyValue.rowDataToString(internalRow, table.rowType()));
+        }
 
         SinkRecord record;
         try {
-            record = write.write(element.getValue());
+            record = write.write(internalRow);
         } catch (Exception e) {
             throw new IOException(e);
         }

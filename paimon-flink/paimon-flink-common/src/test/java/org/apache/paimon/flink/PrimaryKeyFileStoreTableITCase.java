@@ -1291,7 +1291,7 @@ public class PrimaryKeyFileStoreTableITCase extends AbstractTestBase {
                                 + "  'fields.i.kind' = 'sequence',"
                                 + "  'fields.i.start' = '0',"
                                 + "  'fields.i.end' = '"
-                                + (usefulNumRows - 1) * factor
+                                + (usefulNumRows * factor - 1)
                                 + "',"
                                 + "  'number-of-rows' = '"
                                 + usefulNumRows * factor

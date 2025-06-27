@@ -25,7 +25,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 /** Tests for reading and writing file store in batch jobs. */
 public class FileStoreBatchE2eTest extends E2eTestBase {
@@ -91,7 +90,7 @@ public class FileStoreBatchE2eTest extends E2eTestBase {
                                 + ") PARTITIONED BY (dt, hr) WITH (\n"
                                 + "  'sink.writer-coordinator.enabled' = '%s'\n"
                                 + ");",
-                        ThreadLocalRandom.current().nextBoolean());
+                        true);
 
         // prepare test data
         writeSharedFile(testDataSourceFile, String.join("\n", data));

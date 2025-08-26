@@ -18,6 +18,7 @@
 
 package org.apache.paimon.operation;
 
+import org.apache.paimon.FileStore;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.InternalRow;
@@ -89,20 +90,14 @@ public abstract class AbstractFileStoreScan implements FileStoreScan {
     private ScanMetrics scanMetrics = null;
     private boolean dropStats;
 
-    public AbstractFileStoreScan(
-            ManifestsReader manifestsReader,
-            SnapshotManager snapshotManager,
-            SchemaManager schemaManager,
-            TableSchema schema,
-            ManifestFile.Factory manifestFileFactory,
-            @Nullable Integer parallelism) {
+    public AbstractFileStoreScan(ManifestsReader manifestsReader, FileStore<?> store) {
         this.manifestsReader = manifestsReader;
-        this.snapshotManager = snapshotManager;
-        this.schemaManager = schemaManager;
-        this.schema = schema;
-        this.manifestFileFactory = manifestFileFactory;
+        this.snapshotManager = store.snapshotManager();
+        this.schemaManager = store.schemaManager();
+        this.schema = store.schema();
+        this.manifestFileFactory = store.manifestFileFactory();
         this.tableSchemas = new ConcurrentHashMap<>();
-        this.parallelism = parallelism;
+        this.parallelism = store.options().scanManifestParallelism();
         this.dropStats = false;
     }
 

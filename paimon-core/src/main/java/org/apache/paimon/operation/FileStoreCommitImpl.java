@@ -19,6 +19,7 @@
 package org.apache.paimon.operation;
 
 import org.apache.paimon.CoreOptions;
+import org.apache.paimon.FileStore;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.annotation.VisibleForTesting;
 import org.apache.paimon.catalog.SnapshotCommit;
@@ -158,67 +159,45 @@ public class FileStoreCommitImpl implements FileStoreCommit {
 
     public FileStoreCommitImpl(
             SnapshotCommit snapshotCommit,
-            FileIO fileIO,
-            SchemaManager schemaManager,
-            String tableName,
             String commitUser,
             RowType partitionType,
-            CoreOptions options,
-            String partitionDefaultName,
-            FileStorePathFactory pathFactory,
-            SnapshotManager snapshotManager,
-            ManifestFile.Factory manifestFileFactory,
-            ManifestList.Factory manifestListFactory,
-            IndexManifestFile.Factory indexManifestFileFactory,
-            FileStoreScan scan,
-            int numBucket,
-            MemorySize manifestTargetSize,
-            MemorySize manifestFullCompactionSize,
-            int manifestMergeMinCount,
-            boolean dynamicPartitionOverwrite,
             @Nullable Comparator<InternalRow> keyComparator,
-            String branchName,
-            StatsFileHandler statsFileHandler,
-            BucketMode bucketMode,
-            @Nullable Integer manifestReadParallelism,
             List<CommitCallback> commitCallbacks,
-            int commitMaxRetries,
-            long commitTimeout,
-            long commitMinRetryWait,
-            long commitMaxRetryWait,
-            @Nullable Long strictModeLastSafeSnapshot,
-            boolean rowTrackingEnabled) {
+            FileStore<?> store) {
         this.snapshotCommit = snapshotCommit;
-        this.fileIO = fileIO;
-        this.schemaManager = schemaManager;
-        this.tableName = tableName;
+        this.fileIO = store.fileIO();
+        this.schemaManager = store.schemaManager();
+        this.tableName = store.tableName();
         this.commitUser = commitUser;
         this.partitionType = partitionType;
-        this.partitionDefaultName = partitionDefaultName;
-        this.pathFactory = pathFactory;
-        this.snapshotManager = snapshotManager;
-        this.manifestFile = manifestFileFactory.create();
-        this.manifestList = manifestListFactory.create();
-        this.indexManifestFile = indexManifestFileFactory.create();
-        this.scan = scan;
+
+        CoreOptions options = store.options();
+        this.partitionDefaultName = options.partitionDefaultName();
+        this.pathFactory = store.pathFactory();
+        this.snapshotManager = store.snapshotManager();
+        this.manifestFile = store.manifestFileFactory().create();
+        this.manifestList = store.manifestListFactory().create();
+        this.indexManifestFile = store.indexManifestFileFactory().create();
+        this.scan = store.newScan();
         // Stats in DELETE Manifest Entries is useless
         if (options.manifestDeleteFileDropStats()) {
             this.scan.dropStats();
         }
-        this.numBucket = numBucket;
-        this.manifestTargetSize = manifestTargetSize;
-        this.manifestFullCompactionSize = manifestFullCompactionSize;
-        this.manifestMergeMinCount = manifestMergeMinCount;
-        this.dynamicPartitionOverwrite = dynamicPartitionOverwrite;
+        this.numBucket = options.bucket();
+        this.manifestTargetSize = options.manifestTargetSize();
+        this.manifestFullCompactionSize = options.manifestFullCompactionThresholdSize();
+        this.manifestMergeMinCount = options.manifestMergeMinCount();
+        this.dynamicPartitionOverwrite =
+                partitionType.getFieldCount() > 0 && options.dynamicPartitionOverwrite();
         this.keyComparator = keyComparator;
-        this.branchName = branchName;
-        this.manifestReadParallelism = manifestReadParallelism;
+        this.branchName = options.branch();
+        this.manifestReadParallelism = options.scanManifestParallelism();
         this.commitCallbacks = commitCallbacks;
-        this.commitMaxRetries = commitMaxRetries;
-        this.commitTimeout = commitTimeout;
-        this.commitMinRetryWait = commitMinRetryWait;
-        this.commitMaxRetryWait = commitMaxRetryWait;
-        this.strictModeLastSafeSnapshot = strictModeLastSafeSnapshot;
+        this.commitMaxRetries = options.commitMaxRetries();
+        this.commitTimeout = options.commitTimeout();
+        this.commitMinRetryWait = options.commitMinRetryWait();
+        this.commitMaxRetryWait = options.commitMaxRetryWait();
+        this.strictModeLastSafeSnapshot = options.commitStrictModeLastSafeSnapshot().orElse(null);
         this.partitionComputer =
                 new InternalRowPartitionComputer(
                         options.partitionDefaultName(),
@@ -228,9 +207,9 @@ public class FileStoreCommitImpl implements FileStoreCommit {
 
         this.ignoreEmptyCommit = true;
         this.commitMetrics = null;
-        this.statsFileHandler = statsFileHandler;
-        this.bucketMode = bucketMode;
-        this.rowTrackingEnabled = rowTrackingEnabled;
+        this.statsFileHandler = store.newStatsFileHandler();
+        this.bucketMode = store.bucketMode();
+        this.rowTrackingEnabled = options.rowTrackingEnabled();
     }
 
     @Override

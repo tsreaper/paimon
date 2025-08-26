@@ -18,23 +18,22 @@
 
 package org.apache.paimon.operation;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.CoreOptions.ChangelogProducer;
 import org.apache.paimon.CoreOptions.MergeEngine;
+import org.apache.paimon.FileStore;
 import org.apache.paimon.KeyValueFileStore;
 import org.apache.paimon.fileindex.FileIndexPredicate;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.manifest.FilteredManifestEntry;
 import org.apache.paimon.manifest.ManifestEntry;
-import org.apache.paimon.manifest.ManifestFile;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.schema.KeyValueFieldsExtractor;
-import org.apache.paimon.schema.SchemaManager;
 import org.apache.paimon.schema.TableSchema;
 import org.apache.paimon.stats.SimpleStatsEvolution;
 import org.apache.paimon.stats.SimpleStatsEvolutions;
 import org.apache.paimon.table.source.ScanMode;
 import org.apache.paimon.types.RowType;
-import org.apache.paimon.utils.SnapshotManager;
 
 import javax.annotation.Nullable;
 
@@ -75,24 +74,14 @@ public class KeyValueFileStoreScan extends AbstractFileStoreScan {
     public KeyValueFileStoreScan(
             ManifestsReader manifestsReader,
             BucketSelectConverter bucketSelectConverter,
-            SnapshotManager snapshotManager,
-            SchemaManager schemaManager,
-            TableSchema schema,
             KeyValueFieldsExtractor keyValueFieldsExtractor,
-            ManifestFile.Factory manifestFileFactory,
-            Integer scanManifestParallelism,
-            boolean deletionVectorsEnabled,
-            MergeEngine mergeEngine,
-            ChangelogProducer changelogProducer,
-            boolean fileIndexReadEnabled) {
-        super(
-                manifestsReader,
-                snapshotManager,
-                schemaManager,
-                schema,
-                manifestFileFactory,
-                scanManifestParallelism);
+            FileStore<?> store) {
+        super(manifestsReader, store);
         this.bucketSelectConverter = bucketSelectConverter;
+
+        TableSchema schema = store.schema();
+        CoreOptions options = store.options();
+
         // NOTE: don't add key prefix to field names because fieldKeyStatsConverters is used for
         // filter conversion
         this.fieldKeyStatsConverters =
@@ -102,10 +91,11 @@ public class KeyValueFileStoreScan extends AbstractFileStoreScan {
                 new SimpleStatsEvolutions(
                         sid -> keyValueFieldsExtractor.valueFields(scanTableSchema(sid)),
                         schema.id());
-        this.deletionVectorsEnabled = deletionVectorsEnabled;
-        this.mergeEngine = mergeEngine;
-        this.changelogProducer = changelogProducer;
-        this.fileIndexReadEnabled = fileIndexReadEnabled;
+        this.deletionVectorsEnabled = options.deletionVectorsEnabled();
+        this.mergeEngine = options.mergeEngine();
+        this.changelogProducer = options.changelogProducer();
+        this.fileIndexReadEnabled =
+                options.fileIndexReadEnabled() && options.deletionVectorsEnabled();
     }
 
     public KeyValueFileStoreScan withKeyFilter(Predicate predicate) {

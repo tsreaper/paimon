@@ -114,6 +114,22 @@ abstract class AbstractFileStore<T> implements FileStore<T> {
         this.catalogEnvironment = catalogEnvironment;
     }
 
+    public FileIO fileIO() {
+        return fileIO;
+    }
+
+    public SchemaManager schemaManager() {
+        return schemaManager;
+    }
+
+    public TableSchema schema() {
+        return schema;
+    }
+
+    public String tableName() {
+        return tableName;
+    }
+
     @Override
     public FileStorePathFactory pathFactory() {
         return pathFactory(options, options.fileFormatString());
@@ -269,36 +285,11 @@ abstract class AbstractFileStore<T> implements FileStore<T> {
         }
         return new FileStoreCommitImpl(
                 snapshotCommit,
-                fileIO,
-                schemaManager,
-                tableName,
                 commitUser,
                 partitionType,
-                options,
-                options.partitionDefaultName(),
-                pathFactory(),
-                snapshotManager,
-                manifestFileFactory(),
-                manifestListFactory(),
-                indexManifestFileFactory(),
-                newScan(),
-                options.bucket(),
-                options.manifestTargetSize(),
-                options.manifestFullCompactionThresholdSize(),
-                options.manifestMergeMinCount(),
-                partitionType.getFieldCount() > 0 && options.dynamicPartitionOverwrite(),
                 newKeyComparator(),
-                options.branch(),
-                newStatsFileHandler(),
-                bucketMode(),
-                options.scanManifestParallelism(),
                 createCommitCallbacks(commitUser, table),
-                options.commitMaxRetries(),
-                options.commitTimeout(),
-                options.commitMinRetryWait(),
-                options.commitMaxRetryWait(),
-                options.commitStrictModeLastSafeSnapshot().orElse(null),
-                options.rowTrackingEnabled());
+                this);
     }
 
     @Override

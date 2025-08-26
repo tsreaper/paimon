@@ -168,15 +168,7 @@ public class AppendOnlyFileStore extends AbstractFileStore<InternalRow> {
                     return Optional.empty();
                 };
 
-        return new AppendOnlyFileStoreScan(
-                newManifestsReader(),
-                bucketSelectConverter,
-                snapshotManager(),
-                schemaManager,
-                schema,
-                manifestFileFactory(),
-                options.scanManifestParallelism(),
-                options.fileIndexReadEnabled());
+        return new AppendOnlyFileStoreScan(newManifestsReader(), bucketSelectConverter, this);
     }
 
     @Override

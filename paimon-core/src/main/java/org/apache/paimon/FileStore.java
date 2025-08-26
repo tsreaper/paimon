@@ -18,6 +18,7 @@
 
 package org.apache.paimon;
 
+import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.index.IndexFileHandler;
 import org.apache.paimon.manifest.IndexManifestFile;
@@ -32,6 +33,8 @@ import org.apache.paimon.operation.SnapshotDeletion;
 import org.apache.paimon.operation.SplitRead;
 import org.apache.paimon.operation.TagDeletion;
 import org.apache.paimon.partition.PartitionExpireStrategy;
+import org.apache.paimon.schema.SchemaManager;
+import org.apache.paimon.schema.TableSchema;
 import org.apache.paimon.service.ServiceManager;
 import org.apache.paimon.stats.StatsFileHandler;
 import org.apache.paimon.table.BucketMode;
@@ -58,6 +61,14 @@ import java.util.List;
  * @param <T> type of record to read and write.
  */
 public interface FileStore<T> {
+
+    FileIO fileIO();
+
+    SchemaManager schemaManager();
+
+    TableSchema schema();
+
+    String tableName();
 
     FileStorePathFactory pathFactory();
 

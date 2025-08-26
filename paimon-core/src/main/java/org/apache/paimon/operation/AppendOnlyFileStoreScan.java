@@ -19,16 +19,13 @@
 package org.apache.paimon.operation;
 
 import org.apache.paimon.AppendOnlyFileStore;
+import org.apache.paimon.FileStore;
 import org.apache.paimon.fileindex.FileIndexPredicate;
 import org.apache.paimon.manifest.ManifestEntry;
-import org.apache.paimon.manifest.ManifestFile;
 import org.apache.paimon.predicate.Predicate;
-import org.apache.paimon.schema.SchemaManager;
-import org.apache.paimon.schema.TableSchema;
 import org.apache.paimon.stats.SimpleStatsEvolution;
 import org.apache.paimon.stats.SimpleStatsEvolutions;
 import org.apache.paimon.types.RowType;
-import org.apache.paimon.utils.SnapshotManager;
 
 import javax.annotation.Nullable;
 
@@ -55,23 +52,13 @@ public class AppendOnlyFileStoreScan extends AbstractFileStoreScan {
     public AppendOnlyFileStoreScan(
             ManifestsReader manifestsReader,
             BucketSelectConverter bucketSelectConverter,
-            SnapshotManager snapshotManager,
-            SchemaManager schemaManager,
-            TableSchema schema,
-            ManifestFile.Factory manifestFileFactory,
-            Integer scanManifestParallelism,
-            boolean fileIndexReadEnabled) {
-        super(
-                manifestsReader,
-                snapshotManager,
-                schemaManager,
-                schema,
-                manifestFileFactory,
-                scanManifestParallelism);
+            FileStore<?> store) {
+        super(manifestsReader, store);
         this.bucketSelectConverter = bucketSelectConverter;
         this.simpleStatsEvolutions =
-                new SimpleStatsEvolutions(sid -> scanTableSchema(sid).fields(), schema.id());
-        this.fileIndexReadEnabled = fileIndexReadEnabled;
+                new SimpleStatsEvolutions(
+                        sid -> scanTableSchema(sid).fields(), store.schema().id());
+        this.fileIndexReadEnabled = store.options().fileIndexReadEnabled();
     }
 
     public AppendOnlyFileStoreScan withFilter(Predicate predicate) {

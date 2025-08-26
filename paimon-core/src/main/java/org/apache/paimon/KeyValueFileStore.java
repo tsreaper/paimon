@@ -227,18 +227,7 @@ public class KeyValueFileStore extends AbstractFileStore<KeyValue> {
                 };
 
         return new KeyValueFileStoreScan(
-                newManifestsReader(),
-                bucketSelectConverter,
-                snapshotManager(),
-                schemaManager,
-                schema,
-                keyValueFieldsExtractor,
-                manifestFileFactory(),
-                options.scanManifestParallelism(),
-                options.deletionVectorsEnabled(),
-                options.mergeEngine(),
-                options.changelogProducer(),
-                options.fileIndexReadEnabled() && options.deletionVectorsEnabled());
+                newManifestsReader(), bucketSelectConverter, keyValueFieldsExtractor, this);
     }
 
     @Override

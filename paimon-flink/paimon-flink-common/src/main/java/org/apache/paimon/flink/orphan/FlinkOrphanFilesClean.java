@@ -25,6 +25,7 @@ import org.apache.paimon.flink.utils.BoundedOneInputOperator;
 import org.apache.paimon.flink.utils.BoundedTwoInputOperator;
 import org.apache.paimon.fs.FileStatus;
 import org.apache.paimon.fs.Path;
+import org.apache.paimon.fs.RemoteIterator;
 import org.apache.paimon.manifest.ManifestEntry;
 import org.apache.paimon.manifest.ManifestFile;
 import org.apache.paimon.operation.CleanOrphanFilesResult;
@@ -64,7 +65,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 
 import static org.apache.flink.api.common.typeinfo.BasicTypeInfo.STRING_TYPE_INFO;
 import static org.apache.flink.util.Preconditions.checkState;
@@ -235,20 +235,35 @@ public class FlinkOrphanFilesClean extends OrphanFilesClean {
                                 });
 
         usedFiles = usedFiles.union(usedManifestFiles);
-        DataStream<Tuple2<String, Long>> candidates =
+        DataStream<String> dirs =
                 env.fromCollection(Collections.singletonList(1), TypeInformation.of(Integer.class))
                         .process(
-                                new ProcessFunction<Integer, Tuple2<String, Long>>() {
+                                new ProcessFunction<Integer, String>() {
                                     @Override
                                     public void processElement(
                                             Integer i,
-                                            ProcessFunction<Integer, Tuple2<String, Long>>.Context
-                                                    ctx,
-                                            Collector<Tuple2<String, Long>> out) {
-                                        listPaimonFilesForTable(out);
+                                            ProcessFunction<Integer, String>.Context ctx,
+                                            Collector<String> out) {
+                                        listPaimonDirsForTable(out);
                                     }
                                 })
+                        .name("list dirs")
                         .setParallelism(1);
+
+        DataStream<Tuple2<String, Long>> candidates =
+                dirs.rebalance()
+                        .process(
+                                new ProcessFunction<String, Tuple2<String, Long>>() {
+                                    @Override
+                                    public void processElement(
+                                            String dir,
+                                            ProcessFunction<String, Tuple2<String, Long>>.Context
+                                                    ctx,
+                                            Collector<Tuple2<String, Long>> out) {
+                                        listPaimonFilesForTable(dir, out);
+                                    }
+                                })
+                        .name("list files");
 
         DataStream<CleanOrphanFilesResult> deleted =
                 usedFiles
@@ -323,47 +338,50 @@ public class FlinkOrphanFilesClean extends OrphanFilesClean {
         return deleted;
     }
 
-    private void listPaimonFilesForTable(Collector<Tuple2<String, Long>> out) {
+    private void listPaimonDirsForTable(Collector<String> out) {
         FileStorePathFactory pathFactory = table.store().pathFactory();
-        List<String> dirs =
-                listPaimonFileDirs(
-                                table.fullName(),
-                                pathFactory.manifestPath().toString(),
-                                pathFactory.indexPath().toString(),
-                                pathFactory.statisticsPath().toString(),
-                                pathFactory.dataFilePath().toString(),
-                                partitionKeysNum,
-                                table.coreOptions().dataFileExternalPaths())
-                        .stream()
-                        .map(Path::toUri)
-                        .map(Object::toString)
-                        .collect(Collectors.toList());
-        Set<Path> emptyDirs = new HashSet<>();
-        for (String dir : dirs) {
-            Path dirPath = new Path(dir);
-            List<FileStatus> files = tryBestListingDirs(dirPath);
-            for (FileStatus file : files) {
+        listPaimonFileDirs(
+                        table.fullName(),
+                        pathFactory.manifestPath().toString(),
+                        pathFactory.indexPath().toString(),
+                        pathFactory.statisticsPath().toString(),
+                        pathFactory.dataFilePath().toString(),
+                        partitionKeysNum,
+                        table.coreOptions().dataFileExternalPaths())
+                .stream()
+                .map(Path::toUri)
+                .map(Object::toString)
+                .forEach(out::collect);
+    }
+
+    private void listPaimonFilesForTable(String dir, Collector<Tuple2<String, Long>> out) {
+        Path dirPath = new Path(dir);
+
+        boolean empty = true;
+        try {
+            RemoteIterator<FileStatus> it = fileIO.listFilesIterative(dirPath, false);
+            while (it.hasNext()) {
+                empty = false;
+                FileStatus file = it.next();
                 if (oldEnough(file)) {
                     out.collect(new Tuple2<>(file.getPath().toUri().toString(), file.getLen()));
                 }
             }
-            if (files.isEmpty()) {
-                emptyDirs.add(dirPath);
-            }
+        } catch (Exception e) {
+            LOG.warn("Failed to list paimon files in directory {}", dir);
+            return;
         }
 
-        // delete empty dir
-        while (!emptyDirs.isEmpty()) {
-            Set<Path> newEmptyDir = new HashSet<>();
-            for (Path emptyDir : emptyDirs) {
+        if (empty) {
+            while (true) {
                 try {
-                    fileIO.delete(emptyDir, false);
+                    fileIO.delete(dirPath, false);
                     // recursive cleaning
-                    newEmptyDir.add(emptyDir.getParent());
+                    dirPath = dirPath.getParent();
                 } catch (IOException ignored) {
+                    break;
                 }
             }
-            emptyDirs = newEmptyDir;
         }
     }
 

@@ -213,6 +213,15 @@ public class FlinkSourceBuilder {
         if (limit != null) {
             readBuilder.withLimit(limit.intValue());
         }
+
+        Options options = Options.fromMap(table.options());
+        if (options.contains(CoreOptions.READ_BUCKET_MIN)
+                && options.contains(CoreOptions.READ_BUCKET_MAX)) {
+            int readBucketMin = options.get(CoreOptions.READ_BUCKET_MIN);
+            int readBucketMax = options.get(CoreOptions.READ_BUCKET_MAX);
+            readBuilder.withBucketFilter(b -> b >= readBucketMin && b <= readBucketMax);
+        }
+
         return readBuilder.dropStats();
     }
 

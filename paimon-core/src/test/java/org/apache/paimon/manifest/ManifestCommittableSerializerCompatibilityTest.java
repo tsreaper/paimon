@@ -90,7 +90,7 @@ public class ManifestCommittableSerializerCompatibilityTest {
                         "my_index_file",
                         1024 * 100,
                         1002,
-                        null,
+                        (LinkedHashMap<String, DeletionVectorMeta>) null,
                         null,
                         globalIndexMeta);
 

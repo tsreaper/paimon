@@ -2091,6 +2091,12 @@ public class CoreOptions implements Serializable {
                     .defaultValue(100000L)
                     .withDescription("Row count per shard for global index.");
 
+    public static final ConfigOption<Integer> READ_BUCKET_MIN =
+            key("read-bucket.min").intType().noDefaultValue();
+
+    public static final ConfigOption<Integer> READ_BUCKET_MAX =
+            key("read-bucket.max").intType().noDefaultValue();
+
     private final Options options;
 
     public CoreOptions(Map<String, String> options) {

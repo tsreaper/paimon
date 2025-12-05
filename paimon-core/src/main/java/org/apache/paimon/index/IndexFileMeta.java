@@ -19,6 +19,7 @@
 package org.apache.paimon.index;
 
 import org.apache.paimon.annotation.Public;
+import org.apache.paimon.data.InternalArray;
 import org.apache.paimon.deletionvectors.DeletionVectorsIndexFile;
 import org.apache.paimon.types.ArrayType;
 import org.apache.paimon.types.BigIntType;
@@ -31,6 +32,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Objects;
 
+import static org.apache.paimon.index.IndexFileMetaSerializer.rowArrayDataToDvMetas;
 import static org.apache.paimon.utils.SerializationUtils.newStringType;
 
 /**
@@ -67,7 +69,9 @@ public class IndexFileMeta {
      * Metadata only used by {@link DeletionVectorsIndexFile}, use LinkedHashMap to ensure that the
      * order of DeletionVectorMetas and the written DeletionVectors is consistent.
      */
-    private final @Nullable LinkedHashMap<String, DeletionVectorMeta> dvRanges;
+    private @Nullable LinkedHashMap<String, DeletionVectorMeta> dvRanges;
+
+    private @Nullable InternalArray dvRangesArray;
 
     private final @Nullable String externalPath;
 
@@ -103,8 +107,32 @@ public class IndexFileMeta {
             String fileName,
             long fileSize,
             long rowCount,
+            @Nullable InternalArray dvRangesArray,
+            @Nullable String externalPath,
             @Nullable GlobalIndexMeta globalIndexMeta) {
-        this(indexType, fileName, fileSize, rowCount, null, null, globalIndexMeta);
+        this.indexType = indexType;
+        this.fileName = fileName;
+        this.fileSize = fileSize;
+        this.rowCount = rowCount;
+        this.dvRangesArray = dvRangesArray;
+        this.externalPath = externalPath;
+        this.globalIndexMeta = globalIndexMeta;
+    }
+
+    public IndexFileMeta(
+            String indexType,
+            String fileName,
+            long fileSize,
+            long rowCount,
+            @Nullable GlobalIndexMeta globalIndexMeta) {
+        this(
+                indexType,
+                fileName,
+                fileSize,
+                rowCount,
+                (LinkedHashMap<String, DeletionVectorMeta>) null,
+                null,
+                globalIndexMeta);
     }
 
     public String indexType() {
@@ -129,7 +157,18 @@ public class IndexFileMeta {
     }
 
     public @Nullable LinkedHashMap<String, DeletionVectorMeta> dvRanges() {
+        lazyDvRanges();
         return dvRanges;
+    }
+
+    public @Nullable InternalArray dvRangesArray() {
+        return dvRangesArray;
+    }
+
+    private void lazyDvRanges() {
+        if (dvRanges == null && dvRangesArray != null) {
+            dvRanges = rowArrayDataToDvMetas(dvRangesArray);
+        }
     }
 
     @Nullable
@@ -146,6 +185,8 @@ public class IndexFileMeta {
             return false;
         }
         IndexFileMeta that = (IndexFileMeta) o;
+        lazyDvRanges();
+        that.lazyDvRanges();
         return Objects.equals(indexType, that.indexType)
                 && Objects.equals(fileName, that.fileName)
                 && fileSize == that.fileSize
@@ -156,11 +197,13 @@ public class IndexFileMeta {
 
     @Override
     public int hashCode() {
+        lazyDvRanges();
         return Objects.hash(indexType, fileName, fileSize, rowCount, dvRanges, externalPath);
     }
 
     @Override
     public String toString() {
+        lazyDvRanges();
         return "IndexManifestEntry{"
                 + "indexType="
                 + indexType

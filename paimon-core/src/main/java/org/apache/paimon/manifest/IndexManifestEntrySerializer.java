@@ -27,7 +27,6 @@ import org.apache.paimon.utils.VersionedObjectSerializer;
 
 import static org.apache.paimon.data.BinaryString.fromString;
 import static org.apache.paimon.index.IndexFileMetaSerializer.dvMetasToRowArrayData;
-import static org.apache.paimon.index.IndexFileMetaSerializer.rowArrayDataToDvMetas;
 import static org.apache.paimon.utils.SerializationUtils.deserializeBinaryRow;
 import static org.apache.paimon.utils.SerializationUtils.serializeBinaryRow;
 
@@ -100,7 +99,7 @@ public class IndexManifestEntrySerializer extends VersionedObjectSerializer<Inde
                         row.getString(4).toString(),
                         row.getLong(5),
                         row.getLong(6),
-                        row.isNullAt(7) ? null : rowArrayDataToDvMetas(row.getArray(7)),
+                        row.isNullAt(7) ? null : row.getArray(7),
                         row.isNullAt(8) ? null : row.getString(8).toString(),
                         globalIndexMeta));
     }

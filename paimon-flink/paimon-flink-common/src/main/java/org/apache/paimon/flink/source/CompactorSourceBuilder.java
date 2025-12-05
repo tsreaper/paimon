@@ -29,6 +29,7 @@ import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.ReadBuilder;
 import org.apache.paimon.table.system.CompactBucketsTable;
 import org.apache.paimon.types.RowType;
+import org.apache.paimon.utils.Filter;
 import org.apache.paimon.utils.Preconditions;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -38,9 +39,12 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -56,6 +60,8 @@ import static org.apache.paimon.utils.SerializationUtils.deserializeBinaryRow;
  * ContinuousFileStoreSource}. This is for dedicated compactor jobs.
  */
 public class CompactorSourceBuilder {
+
+    private static final Logger LOG = LoggerFactory.getLogger(CompactorSourceBuilder.class);
 
     private final String tableIdentifier;
     private final FileStoreTable table;
@@ -96,6 +102,16 @@ public class CompactorSourceBuilder {
         if (CoreOptions.fromMap(table.options()).manifestDeleteFileDropStats()) {
             readBuilder = readBuilder.dropStats();
         }
+
+        Options tmp = Options.fromMap(table.options());
+        if (tmp.contains(CoreOptions.READ_BUCKET_MIN)
+                && tmp.contains(CoreOptions.READ_BUCKET_MAX)) {
+            final int readBucketMin = tmp.get(CoreOptions.READ_BUCKET_MIN);
+            final int readBucketMax = tmp.get(CoreOptions.READ_BUCKET_MAX);
+            readBuilder.withBucketFilter(new BucketRangeFilter(readBucketMin, readBucketMax));
+            LOG.info("yo~ bucket range is {} ~ {}", readBucketMin, readBucketMax);
+        }
+
         if (isContinuous) {
             return new ContinuousFileStoreSource(readBuilder, compactBucketsTable.options(), null);
         } else {
@@ -106,6 +122,24 @@ public class CompactorSourceBuilder {
                     options.get(FlinkConnectorOptions.SCAN_SPLIT_ENUMERATOR_BATCH_SIZE),
                     options.get(FlinkConnectorOptions.SCAN_SPLIT_ENUMERATOR_ASSIGN_MODE),
                     options.get(CoreOptions.BLOB_AS_DESCRIPTOR));
+        }
+    }
+
+    private static class BucketRangeFilter implements Filter<Integer>, Serializable {
+
+        private static final long serialVersionUID = 1L;
+
+        private final int mn;
+        private final int mx;
+
+        private BucketRangeFilter(int mn, int mx) {
+            this.mn = mn;
+            this.mx = mx;
+        }
+
+        @Override
+        public boolean test(Integer b) {
+            return b >= mn && b <= mx;
         }
     }
 

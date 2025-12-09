@@ -165,8 +165,18 @@ public class LookupLevels<T> implements Levels.DropFileCallback, Closeable {
             return null;
         }
 
-        return getOrCreateProcessor(lookupFile.schemaId(), lookupFile.serVersion())
-                .readFromDisk(key, lookupFile.level(), valueBytes, file.fileName());
+        try {
+            return getOrCreateProcessor(lookupFile.schemaId(), lookupFile.serVersion())
+                    .readFromDisk(key, lookupFile.level(), valueBytes, file.fileName());
+        } catch (Throwable t) {
+            if (remoteFileDownloader != null) {
+                Optional<RemoteSstFile> remoteSstFile = remoteSst(file);
+                remoteSstFile.ifPresent(
+                        sstFile ->
+                                remoteFileDownloader.deleteRemoteFile(file, sstFile.sstFileName));
+            }
+            throw t;
+        }
     }
 
     private PersistProcessor<T> getOrCreateProcessor(long schemaId, String serVersion) {

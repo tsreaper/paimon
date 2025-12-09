@@ -99,7 +99,14 @@ public class RemoteLookupFileManager<T> implements RemoteFileDownloader {
         }
     }
 
-    private Path remoteSstPath(DataFileMeta file, String remoteSstName) {
+    @Override
+    public void deleteRemoteFile(DataFileMeta dataFile, String remoteSstFile) {
+        Path path = remoteSstPath(dataFile, remoteSstFile);
+        fileIO.deleteQuietly(path);
+        LOG.info("Deleted remote lookup file {}", path);
+    }
+
+    public Path remoteSstPath(DataFileMeta file, String remoteSstName) {
         return new Path(pathFactory.toPath(file).getParent(), remoteSstName);
     }
 }

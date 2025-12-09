@@ -26,4 +26,6 @@ import java.io.File;
 public interface RemoteFileDownloader {
 
     boolean tryToDownload(DataFileMeta dataFile, String remoteSstFile, File localFile);
+
+    void deleteRemoteFile(DataFileMeta dataFile, String remoteSstFile);
 }

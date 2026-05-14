@@ -43,13 +43,17 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.function.LongPredicate;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.paimon.catalog.Identifier.DEFAULT_MAIN_BRANCH;
@@ -68,6 +72,20 @@ public class TagManager {
     private final Path tablePath;
     private final String branch;
     @Nullable private final TagPeriodHandler tagPeriodHandler;
+
+    /**
+     * Optional cross-branch protection. When set, these suppliers expose files / snapshots that are
+     * still referenced by other branches (which share physical data files with this branch), so
+     * that tag deletion does not over-delete shared files.
+     *
+     * <p>Why: branches share physical data and index files; their snapshot lineages do not. Without
+     * this, deleting a tag on branch A can remove files still referenced by branch B.
+     */
+    private Supplier<Set<String>> otherBranchManifestSkipping = Collections::emptySet;
+
+    private Supplier<Predicate<ExpireFileEntry>> otherBranchDataFileSkipper = () -> entry -> false;
+
+    private LongPredicate otherBranchSnapshotRefs = id -> false;
 
     public TagManager(FileIO fileIO, Path tablePath) {
         this(fileIO, tablePath, DEFAULT_MAIN_BRANCH, (TagPeriodHandler) null);
@@ -105,6 +123,27 @@ public class TagManager {
     // according to branch options.
     public TagManager copyWithBranch(String branchName) {
         return new TagManager(fileIO, tablePath, branchName, (TagPeriodHandler) null);
+    }
+
+    /**
+     * Inject cross-branch protection. Files / snapshots reported by the supplied callbacks are
+     * preserved during {@link #deleteTag} / {@link #doClean}.
+     *
+     * @param manifestSkipping manifest, index, and statistics file names still in use by other
+     *     branches
+     * @param dataFileSkipper predicate that returns {@code true} for data file entries still in use
+     *     by other branches
+     * @param snapshotRefs predicate that returns {@code true} when the given snapshot id is still
+     *     referenced (as a live snapshot or tag) by some other branch
+     */
+    public TagManager withOtherBranchProtection(
+            Supplier<Set<String>> manifestSkipping,
+            Supplier<Predicate<ExpireFileEntry>> dataFileSkipper,
+            LongPredicate snapshotRefs) {
+        this.otherBranchManifestSkipping = manifestSkipping;
+        this.otherBranchDataFileSkipper = dataFileSkipper;
+        this.otherBranchSnapshotRefs = snapshotRefs;
+        return this;
     }
 
     /** Return the root Directory of tags. */
@@ -216,8 +255,10 @@ public class TagManager {
         Snapshot taggedSnapshot = getOrThrow(tagNames.get(0)).trimToSnapshot();
         List<Snapshot> taggedSnapshots;
 
-        // skip file deletion if snapshot exists
-        if (snapshotManager.snapshotExists(taggedSnapshot.id())) {
+        // skip file deletion if snapshot exists in this branch or is referenced by some other
+        // branch (which shares physical data files with this one)
+        if (snapshotManager.snapshotExists(taggedSnapshot.id())
+                || otherBranchSnapshotRefs.test(taggedSnapshot.id())) {
             tagNames.forEach(tagName -> fileIO.deleteQuietly(tagPath(tagName)));
             return;
         } else {
@@ -245,8 +286,10 @@ public class TagManager {
         Snapshot taggedSnapshot = tag.get().trimToSnapshot();
         List<Snapshot> taggedSnapshots;
 
-        // skip file deletion if snapshot exists
-        if (snapshotManager.copyWithBranch(branch).snapshotExists(taggedSnapshot.id())) {
+        // skip file deletion if snapshot exists in this branch, or is referenced by some other
+        // branch (which shares physical data files with this one)
+        if (snapshotManager.copyWithBranch(branch).snapshotExists(taggedSnapshot.id())
+                || otherBranchSnapshotRefs.test(taggedSnapshot.id())) {
             deleteTagMetaFile(tagName, callbacks);
             return;
         } else {
@@ -300,7 +343,9 @@ public class TagManager {
         Predicate<ExpireFileEntry> dataFileSkipper = null;
         boolean success = true;
         try {
-            dataFileSkipper = tagDeletion.dataFileSkipper(skippedSnapshots);
+            Predicate<ExpireFileEntry> branchLocal = tagDeletion.dataFileSkipper(skippedSnapshots);
+            Predicate<ExpireFileEntry> crossBranch = otherBranchDataFileSkipper.get();
+            dataFileSkipper = entry -> branchLocal.test(entry) || crossBranch.test(entry);
         } catch (Exception e) {
             LOG.info(
                     String.format(
@@ -318,7 +363,8 @@ public class TagManager {
         success = true;
         Set<String> manifestSkippingSet = null;
         try {
-            manifestSkippingSet = tagDeletion.manifestSkippingSet(skippedSnapshots);
+            manifestSkippingSet = new HashSet<>(tagDeletion.manifestSkippingSet(skippedSnapshots));
+            manifestSkippingSet.addAll(otherBranchManifestSkipping.get());
         } catch (Exception e) {
             LOG.info(
                     String.format(

@@ -25,10 +25,13 @@ import org.apache.paimon.consumer.ConsumerManager;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.globalindex.DataEvolutionBatchScan;
+import org.apache.paimon.manifest.ExpireFileEntry;
 import org.apache.paimon.manifest.IndexManifestEntry;
 import org.apache.paimon.manifest.ManifestEntry;
 import org.apache.paimon.manifest.ManifestFileMeta;
 import org.apache.paimon.operation.FileStoreScan;
+import org.apache.paimon.operation.SnapshotDeletion;
+import org.apache.paimon.operation.TagDeletion;
 import org.apache.paimon.options.ExpireConfig;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.Predicate;
@@ -75,16 +78,20 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.function.BiConsumer;
 import java.util.function.LongConsumer;
 
 import static org.apache.paimon.CoreOptions.PATH;
+import static org.apache.paimon.catalog.Identifier.DEFAULT_MAIN_BRANCH;
 
 /** Abstract {@link FileStoreTable}. */
 abstract class AbstractFileStoreTable implements FileStoreTable {
@@ -450,19 +457,23 @@ abstract class AbstractFileStoreTable implements FileStoreTable {
     @Override
     public ExpireSnapshots newExpireSnapshots() {
         return new ExpireSnapshotsImpl(
-                snapshotManager(),
-                changelogManager(),
-                store().newSnapshotDeletion(),
-                store().newTagManager());
+                        snapshotManager(),
+                        changelogManager(),
+                        store().newSnapshotDeletion(),
+                        store().newTagManager())
+                .withOtherBranchProtection(
+                        this::otherBranchManifestSkippingFiles, this::otherBranchDataFileSkipper);
     }
 
     @Override
     public ExpireSnapshots newExpireChangelog() {
         return new ExpireChangelogImpl(
-                snapshotManager(),
-                changelogManager(),
-                tagManager(),
-                store().newChangelogDeletion());
+                        snapshotManager(),
+                        changelogManager(),
+                        tagManager(),
+                        store().newChangelogDeletion())
+                .withOtherBranchProtection(
+                        this::otherBranchManifestSkippingFiles, this::otherBranchDataFileSkipper);
     }
 
     @Override
@@ -472,13 +483,32 @@ abstract class AbstractFileStoreTable implements FileStoreTable {
                 store().newCommit(commitUser, this),
                 newExpireRunnable(),
                 options.writeOnly() ? null : store().newPartitionExpire(commitUser, this),
-                options.writeOnly() ? null : store().newTagAutoManager(this),
+                options.writeOnly() ? null : newProtectedTagAutoManager(),
                 options.writeOnly() ? null : CoreOptions.fromMap(options()).consumerExpireTime(),
                 new ConsumerManager(fileIO, path, snapshotManager().branch()),
                 options.snapshotExpireExecutionMode(),
                 name(),
                 options.forceCreatingSnapshot(),
                 options.fileOperationThreadNum());
+    }
+
+    /**
+     * Build a {@link TagAutoManager} whose {@link TagManager} preserves files referenced by other
+     * branches when auto-rotating tags. See {@link #otherBranchManifestSkippingFiles}.
+     */
+    private TagAutoManager newProtectedTagAutoManager() {
+        TagManager autoTagManager =
+                store().newTagManager()
+                        .withOtherBranchProtection(
+                                this::otherBranchManifestSkippingFiles,
+                                this::otherBranchDataFileSkipper,
+                                this::isSnapshotReferencedByOtherBranches);
+        return TagAutoManager.create(
+                coreOptions(),
+                store().snapshotManager(),
+                autoTagManager,
+                store().newTagDeletion(),
+                store().createTagCallbacks(this));
     }
 
     @Override
@@ -739,7 +769,11 @@ abstract class AbstractFileStoreTable implements FileStoreTable {
 
     @Override
     public TagManager tagManager() {
-        return new TagManager(fileIO, path, currentBranch(), coreOptions());
+        return new TagManager(fileIO, path, currentBranch(), coreOptions())
+                .withOtherBranchProtection(
+                        this::otherBranchManifestSkippingFiles,
+                        this::otherBranchDataFileSkipper,
+                        this::isSnapshotReferencedByOtherBranches);
     }
 
     @Override
@@ -750,6 +784,149 @@ abstract class AbstractFileStoreTable implements FileStoreTable {
         }
         return new FileSystemBranchManager(
                 fileIO, path, snapshotManager(), tagManager(), schemaManager());
+    }
+
+    /**
+     * Manifest / index manifest / statistics file names still referenced by any branch other than
+     * this one. Branches share physical data and index files but maintain independent snapshot
+     * lineages, so a tag-delete or snapshot-expire on this branch must not delete files that are
+     * live on another branch.
+     */
+    Set<String> otherBranchManifestSkippingFiles() {
+        Set<String> result = new HashSet<>();
+        for (String branch : otherBranchNames()) {
+            FileStoreTable branchTable;
+            try {
+                branchTable = switchToBranch(branch);
+            } catch (Exception e) {
+                throw new RuntimeException(
+                        String.format(
+                                "Failed to switch to branch '%s' to compute cross-branch manifest skipping set",
+                                branch),
+                        e);
+            }
+            List<Snapshot> snapshots = collectProtectedSnapshots(branchTable);
+            if (snapshots.isEmpty()) {
+                continue;
+            }
+            SnapshotDeletion deletion = branchTable.store().newSnapshotDeletion();
+            result.addAll(deletion.manifestSkippingSet(snapshots));
+        }
+        return result;
+    }
+
+    /**
+     * Data file entries still referenced by another branch (see {@link
+     * #otherBranchManifestSkippingFiles}).
+     */
+    java.util.function.Predicate<ExpireFileEntry> otherBranchDataFileSkipper() {
+        List<java.util.function.Predicate<ExpireFileEntry>> perBranch = new ArrayList<>();
+        for (String branch : otherBranchNames()) {
+            FileStoreTable branchTable;
+            try {
+                branchTable = switchToBranch(branch);
+            } catch (Exception e) {
+                throw new RuntimeException(
+                        String.format(
+                                "Failed to switch to branch '%s' to compute cross-branch data file skipper",
+                                branch),
+                        e);
+            }
+            List<Snapshot> snapshots = collectProtectedSnapshots(branchTable);
+            if (snapshots.isEmpty()) {
+                continue;
+            }
+            TagDeletion deletion = branchTable.store().newTagDeletion();
+            try {
+                perBranch.add(deletion.dataFileSkipper(snapshots));
+            } catch (Exception e) {
+                throw new RuntimeException(
+                        String.format(
+                                "Failed to compute cross-branch data file skipper for branch '%s'",
+                                branch),
+                        e);
+            }
+        }
+        if (perBranch.isEmpty()) {
+            return entry -> false;
+        }
+        return entry -> {
+            for (java.util.function.Predicate<ExpireFileEntry> p : perBranch) {
+                if (p.test(entry)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+    }
+
+    /**
+     * Whether the given snapshot id is still referenced (as a live snapshot or tag) by any other
+     * branch.
+     */
+    boolean isSnapshotReferencedByOtherBranches(long snapshotId) {
+        for (String branch : otherBranchNames()) {
+            FileStoreTable branchTable;
+            try {
+                branchTable = switchToBranch(branch);
+            } catch (Exception e) {
+                // Be conservative: if we can't read another branch, assume it might reference
+                // the snapshot so we skip deletion rather than risk data loss.
+                return true;
+            }
+            if (branchTable.snapshotManager().snapshotExists(snapshotId)) {
+                return true;
+            }
+            for (Snapshot s : branchTable.tagManager().taggedSnapshots()) {
+                if (s.id() == snapshotId) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Snapshots whose manifests we read to enumerate files referenced by a branch.
+     *
+     * <p>Within a single branch each {@link IndexManifestEntry} for a (partition, bucket) lives
+     * across a contiguous range of snapshots ({@code [S_add, S_replaced - 1]}), so reading the
+     * earliest and latest snapshots' manifests is enough to cover everything in between. We also
+     * include any tagged snapshots that may sit outside the live lineage.
+     */
+    private List<Snapshot> collectProtectedSnapshots(FileStoreTable branchTable) {
+        List<Snapshot> result = new ArrayList<>();
+        Snapshot earliest = branchTable.snapshotManager().earliestSnapshot();
+        if (earliest != null) {
+            result.add(earliest);
+        }
+        Snapshot latest = branchTable.snapshotManager().latestSnapshot();
+        if (latest != null && (earliest == null || latest.id() != earliest.id())) {
+            result.add(latest);
+        }
+        result.addAll(branchTable.tagManager().taggedSnapshots());
+        return result;
+    }
+
+    private List<String> otherBranchNames() {
+        List<String> result = new ArrayList<>();
+        String me = BranchManager.normalizeBranch(currentBranch());
+        List<String> branches;
+        try {
+            branches = branchManager().branches();
+        } catch (Exception e) {
+            // If we cannot list branches we cannot protect anything; return empty rather than fail.
+            return result;
+        }
+        for (String b : branches) {
+            if (!b.equals(me)) {
+                result.add(b);
+            }
+        }
+        if (!BranchManager.isMainBranch(me)) {
+            result.add(DEFAULT_MAIN_BRANCH);
+        }
+        return result;
     }
 
     @Override

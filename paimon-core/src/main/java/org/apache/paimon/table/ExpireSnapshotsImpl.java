@@ -37,6 +37,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -66,6 +67,14 @@ public class ExpireSnapshotsImpl implements ExpireSnapshots {
     private ExpireConfig expireConfig;
     private Supplier<Long> currentTimeMillis = System::currentTimeMillis;
 
+    /**
+     * Files / data-file entries reported by these suppliers are still in use by other branches
+     * (branches share physical data files but not snapshot lineages) and must not be deleted.
+     */
+    private Supplier<Set<String>> otherBranchManifestSkipping = Collections::emptySet;
+
+    private Supplier<Predicate<ExpireFileEntry>> otherBranchDataFileSkipper = () -> entry -> false;
+
     public ExpireSnapshotsImpl(
             SnapshotManager snapshotManager,
             ChangelogManager changelogManager,
@@ -87,6 +96,15 @@ public class ExpireSnapshotsImpl implements ExpireSnapshots {
     @VisibleForTesting
     public void setCurrentTimeMillis(Supplier<Long> currentTimeMillis) {
         this.currentTimeMillis = currentTimeMillis;
+    }
+
+    /** See {@link TagManager#withOtherBranchProtection}. */
+    public ExpireSnapshotsImpl withOtherBranchProtection(
+            Supplier<Set<String>> manifestSkipping,
+            Supplier<Predicate<ExpireFileEntry>> dataFileSkipper) {
+        this.otherBranchManifestSkipping = manifestSkipping;
+        this.otherBranchDataFileSkipper = dataFileSkipper;
+        return this;
     }
 
     @Override
@@ -197,6 +215,8 @@ public class ExpireSnapshotsImpl implements ExpireSnapshots {
 
         // tags to create data file skipper
         List<Snapshot> taggedSnapshots = tagManager.taggedSnapshots();
+        // build cross-branch skipper once; the underlying scan is expensive
+        Predicate<ExpireFileEntry> crossBranchDataFileSkipper = otherBranchDataFileSkipper.get();
 
         // delete merge tree files
         // deleted merge tree files in a snapshot are not used by the next snapshot, so the range of
@@ -212,7 +232,10 @@ public class ExpireSnapshotsImpl implements ExpireSnapshots {
             // expire merge tree files and collect changed buckets
             Predicate<ExpireFileEntry> skipper;
             try {
-                skipper = snapshotDeletion.createDataFileSkipperForTags(taggedSnapshots, id);
+                Predicate<ExpireFileEntry> branchLocal =
+                        snapshotDeletion.createDataFileSkipperForTags(taggedSnapshots, id);
+                skipper =
+                        entry -> branchLocal.test(entry) || crossBranchDataFileSkipper.test(entry);
             } catch (Exception e) {
                 LOG.info(
                         "Skip cleaning data files of snapshot '{}' due to failed to build skipping set.",
@@ -255,6 +278,7 @@ public class ExpireSnapshotsImpl implements ExpireSnapshots {
         Set<String> skippingSet = null;
         try {
             skippingSet = new HashSet<>(snapshotDeletion.manifestSkippingSet(skippingSnapshots));
+            skippingSet.addAll(otherBranchManifestSkipping.get());
         } catch (Exception e) {
             LOG.info("Skip cleaning manifest files due to failed to build skipping set.", e);
         }

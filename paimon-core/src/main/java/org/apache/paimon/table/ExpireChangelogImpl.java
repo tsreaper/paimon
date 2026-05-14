@@ -35,9 +35,12 @@ import org.slf4j.LoggerFactory;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import static org.apache.paimon.table.ExpireSnapshotsImpl.findSkippingTags;
 
@@ -53,6 +56,14 @@ public class ExpireChangelogImpl implements ExpireSnapshots {
     private final TagManager tagManager;
 
     private ExpireConfig expireConfig;
+
+    /**
+     * Files / data-file entries reported by these suppliers are still in use by other branches
+     * (branches share physical data files but not snapshot lineages) and must not be deleted.
+     */
+    private Supplier<Set<String>> otherBranchManifestSkipping = Collections::emptySet;
+
+    private Supplier<Predicate<ExpireFileEntry>> otherBranchDataFileSkipper = () -> entry -> false;
 
     public ExpireChangelogImpl(
             SnapshotManager snapshotManager,
@@ -74,6 +85,15 @@ public class ExpireChangelogImpl implements ExpireSnapshots {
     @Override
     public ExpireSnapshots config(ExpireConfig expireConfig) {
         this.expireConfig = expireConfig;
+        return this;
+    }
+
+    /** See {@link TagManager#withOtherBranchProtection}. */
+    public ExpireChangelogImpl withOtherBranchProtection(
+            Supplier<Set<String>> manifestSkipping,
+            Supplier<Predicate<ExpireFileEntry>> dataFileSkipper) {
+        this.otherBranchManifestSkipping = manifestSkipping;
+        this.otherBranchDataFileSkipper = dataFileSkipper;
         return this;
     }
 
@@ -150,7 +170,10 @@ public class ExpireChangelogImpl implements ExpireSnapshots {
                 findSkippingTags(taggedSnapshots, earliestId, endExclusiveId);
         skippingSnapshots.add(changelogManager.changelog(endExclusiveId));
         skippingSnapshots.add(snapshotManager.earliestSnapshot());
-        Set<String> manifestSkippSet = changelogDeletion.manifestSkippingSet(skippingSnapshots);
+        Set<String> manifestSkippSet =
+                new HashSet<>(changelogDeletion.manifestSkippingSet(skippingSnapshots));
+        manifestSkippSet.addAll(otherBranchManifestSkipping.get());
+        Predicate<ExpireFileEntry> crossBranchDataFileSkipper = otherBranchDataFileSkipper.get();
         for (long id = earliestId; id < endExclusiveId; id++) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Ready to delete changelog files from changelog #" + id);
@@ -158,7 +181,10 @@ public class ExpireChangelogImpl implements ExpireSnapshots {
             Changelog changelog = changelogManager.longLivedChangelog(id);
             Predicate<ExpireFileEntry> skipper;
             try {
-                skipper = changelogDeletion.createDataFileSkipperForTags(taggedSnapshots, id);
+                Predicate<ExpireFileEntry> branchLocal =
+                        changelogDeletion.createDataFileSkipperForTags(taggedSnapshots, id);
+                skipper =
+                        entry -> branchLocal.test(entry) || crossBranchDataFileSkipper.test(entry);
             } catch (Exception e) {
                 LOG.info(
                         String.format(
@@ -216,7 +242,10 @@ public class ExpireChangelogImpl implements ExpireSnapshots {
                 findSkippingTags(taggedSnapshots, earliestChangelogId, earliestSnapshotId);
         skippingSnapshots.add(snapshotManager.snapshot(earliestSnapshotId));
 
-        Set<String> manifestSkippSet = changelogDeletion.manifestSkippingSet(skippingSnapshots);
+        Set<String> manifestSkippSet =
+                new HashSet<>(changelogDeletion.manifestSkippingSet(skippingSnapshots));
+        manifestSkippSet.addAll(otherBranchManifestSkipping.get());
+        Predicate<ExpireFileEntry> crossBranchDataFileSkipper = otherBranchDataFileSkipper.get();
         for (long id = earliestChangelogId; id <= latestChangelogId; id++) {
 
             LOG.info("Ready to delete changelog files from changelog #" + id);
@@ -230,7 +259,10 @@ public class ExpireChangelogImpl implements ExpireSnapshots {
             }
             Predicate<ExpireFileEntry> skipper;
             try {
-                skipper = changelogDeletion.createDataFileSkipperForTags(taggedSnapshots, id);
+                Predicate<ExpireFileEntry> branchLocal =
+                        changelogDeletion.createDataFileSkipperForTags(taggedSnapshots, id);
+                skipper =
+                        entry -> branchLocal.test(entry) || crossBranchDataFileSkipper.test(entry);
             } catch (Exception e) {
                 LOG.info(
                         String.format(

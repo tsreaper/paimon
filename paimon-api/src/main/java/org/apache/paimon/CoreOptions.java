@@ -2939,6 +2939,13 @@ public class CoreOptions implements Serializable {
                         .defaultValue(Integer.MAX_VALUE));
     }
 
+    public int fieldCollectAggCountLimit(String fieldName) {
+        return options.get(
+                key(FIELDS_PREFIX + "." + fieldName + "." + COUNT_LIMIT)
+                        .intType()
+                        .defaultValue(Integer.MAX_VALUE));
+    }
+
     public boolean fieldCollectAggDistinct(String fieldName) {
         return options.get(
                 key(FIELDS_PREFIX + "." + fieldName + "." + DISTINCT)

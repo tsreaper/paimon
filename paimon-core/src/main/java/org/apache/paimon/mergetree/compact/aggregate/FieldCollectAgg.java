@@ -33,8 +33,8 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.function.BiFunction;
 
@@ -46,12 +46,14 @@ public class FieldCollectAgg extends FieldAggregator {
     private static final long serialVersionUID = 1L;
 
     private final boolean distinct;
+    private final int countLimit;
     private final InternalArray.ElementGetter elementGetter;
     @Nullable private final BiFunction<Object, Object, Boolean> equaliser;
 
-    public FieldCollectAgg(String name, ArrayType dataType, boolean distinct) {
+    public FieldCollectAgg(String name, ArrayType dataType, boolean distinct, int countLimit) {
         super(name, dataType);
         this.distinct = distinct;
+        this.countLimit = countLimit;
         this.elementGetter = InternalArray.createElementGetter(dataType.getElementType());
 
         if (distinct
@@ -97,7 +99,7 @@ public class FieldCollectAgg extends FieldAggregator {
         }
 
         if ((accumulator == null || inputField == null) && !distinct) {
-            return accumulator == null ? inputField : accumulator;
+            return limit(accumulator == null ? inputField : accumulator);
         }
 
         if (equaliser != null) {
@@ -106,12 +108,37 @@ public class FieldCollectAgg extends FieldAggregator {
             // need to distinct it every time
             collect(collection, accumulator);
             collectWithEqualiser(collection, inputField);
-            return new GenericArray(collection.toArray());
-        } else {
-            Collection<Object> collection = distinct ? new HashSet<>() : new ArrayList<>();
+            return new GenericArray(limit(collection).toArray());
+        } else if (distinct) {
+            Collection<Object> collection = new LinkedHashSet<>();
             collect(collection, accumulator);
             collect(collection, inputField);
-            return new GenericArray(collection.toArray());
+            return new GenericArray(limit(new ArrayList<>(collection)).toArray());
+        } else {
+            InternalArray array1 = (InternalArray) accumulator;
+            InternalArray array2 = (InternalArray) inputField;
+            int firstHalfSize = array1.size();
+            int total = array1.size() + array2.size();
+            int l, r;
+            if (countLimit >= 0) {
+                l = 0;
+                r = countLimit;
+            } else {
+                l = total + countLimit;
+                r = total;
+            }
+            l = Math.max(0, l);
+            r = Math.min(total, r);
+
+            Object[] result = new Object[r - l];
+            for (int i = l; i < r; i++) {
+                if (i < firstHalfSize) {
+                    result[i - l] = elementGetter.getElementOrNull(array1, i);
+                } else {
+                    result[i - l] = elementGetter.getElementOrNull(array2, i - firstHalfSize);
+                }
+            }
+            return new GenericArray(result);
         }
     }
 
@@ -162,11 +189,11 @@ public class FieldCollectAgg extends FieldAggregator {
 
         // nothing to be retracted
         if (retractField == null) {
-            return accumulator;
+            return limit(accumulator);
         }
         InternalArray retract = (InternalArray) retractField;
         if (retract.size() == 0) {
-            return accumulator;
+            return limit(accumulator);
         }
 
         List<Object> retractedElements = new ArrayList<>();
@@ -182,7 +209,7 @@ public class FieldCollectAgg extends FieldAggregator {
                 accElements.add(candidate);
             }
         }
-        return new GenericArray(accElements.toArray());
+        return new GenericArray(limit(accElements).toArray());
     }
 
     private boolean retract(List<Object> list, Object element) {
@@ -195,6 +222,44 @@ public class FieldCollectAgg extends FieldAggregator {
             }
         }
         return false;
+    }
+
+    private InternalArray limit(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+
+        InternalArray array = (InternalArray) obj;
+        int size = array.size();
+        if (Math.abs(countLimit) >= size) {
+            return array;
+        }
+
+        int l, r;
+        if (countLimit >= 0) {
+            l = 0;
+            r = countLimit;
+        } else {
+            l = size + countLimit;
+            r = size;
+        }
+
+        Object[] result = new Object[r - l];
+        for (int i = l; i < r; i++) {
+            result[i - l] = elementGetter.getElementOrNull(array, i);
+        }
+        return new GenericArray(result);
+    }
+
+    private List<Object> limit(List<Object> list) {
+        int size = list.size();
+        if (Math.abs(countLimit) >= list.size()) {
+            return list;
+        } else if (countLimit >= 0) {
+            return list.subList(0, countLimit);
+        } else {
+            return list.subList(size + countLimit, size);
+        }
     }
 
     private boolean equals(Object a, Object b) {

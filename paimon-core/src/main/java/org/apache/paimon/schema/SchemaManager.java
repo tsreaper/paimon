@@ -87,6 +87,7 @@ import java.util.stream.Collectors;
 import static org.apache.paimon.CoreOptions.AGG_FUNCTION;
 import static org.apache.paimon.CoreOptions.BUCKET_KEY;
 import static org.apache.paimon.CoreOptions.CLUSTERING_COLUMNS;
+import static org.apache.paimon.CoreOptions.COUNT_LIMIT;
 import static org.apache.paimon.CoreOptions.DELETION_VECTORS_ENABLED;
 import static org.apache.paimon.CoreOptions.DELETION_VECTORS_MODIFIABLE;
 import static org.apache.paimon.CoreOptions.DISTINCT;
@@ -842,6 +843,7 @@ public class SchemaManager implements Serializable {
                         fieldName -> FIELDS_PREFIX + "." + fieldName + "." + AGG_FUNCTION,
                         fieldName -> FIELDS_PREFIX + "." + fieldName + "." + IGNORE_RETRACT,
                         fieldName -> FIELDS_PREFIX + "." + fieldName + "." + DISTINCT,
+                        fieldName -> FIELDS_PREFIX + "." + fieldName + "." + COUNT_LIMIT,
                         fieldName -> FIELDS_PREFIX + "." + fieldName + "." + LIST_AGG_DELIMITER);
 
         for (RenameColumn rename : renameColumns) {

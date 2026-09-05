@@ -79,7 +79,13 @@ public class BlockCache implements Closeable {
                             },
                             blocks::remove);
             container = new SegmentContainer(segment);
-            blocks.put(cacheKey, container);
+            if (cacheManager.containsPage(cacheKey, segment)) {
+                blocks.put(cacheKey, container);
+                // Eviction may race with registering this reader's reference.
+                if (!cacheManager.containsPage(cacheKey, segment)) {
+                    blocks.remove(cacheKey, container);
+                }
+            }
         }
         return container.access();
     }

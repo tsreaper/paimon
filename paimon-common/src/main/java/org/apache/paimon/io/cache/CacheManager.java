@@ -102,6 +102,12 @@ public class CacheManager implements AutoCloseable {
         return checkNotNull(value, "Cache result for key(%s) is null", key).segment;
     }
 
+    public boolean containsPage(CacheKey key, MemorySegment segment) {
+        Cache cache = key.isIndex() ? indexCache : dataCache;
+        Cache.CacheValue value = cache.asMap().get(key);
+        return value != null && value.segment == segment;
+    }
+
     public void invalidPage(CacheKey key) {
         if (key.isIndex()) {
             indexCache.invalidate(key);
